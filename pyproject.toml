@@ -1,7 +1,7 @@
 [project]
 name = "ci-insights"
 description = "Local retrospective analytics for GitLab CI/CD pipelines"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.14,<3.15"
 dynamic = ["version"]
 dependencies = [
     "duckdb>=1.1",
@@ -33,13 +33,13 @@ packages = ["src/ci_insights"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "UP", "B", "SIM"]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.14"
 disallow_untyped_defs = true
 no_implicit_optional = true
 check_untyped_defs = true
