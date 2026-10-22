@@ -2,18 +2,19 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
-from ci_insights.domain import (
+from glabviz.domain import (
     ObjectCategory,
     ProjectInfo,
     SnapshotCompleteness,
     SourcePresence,
 )
-from ci_insights.metrics import classify_pipeline, executed_attempts
-from ci_insights.storage import Storage
+from glabviz.metrics import classify_pipeline, executed_attempts
+from glabviz.storage import Storage
 from tests.factories import BASE, attempt, snapshot
 
 START = datetime(2026, 1, 1, tzinfo=UTC)
@@ -45,6 +46,27 @@ def test_repeated_publish_is_idempotent(storage):
     assert len(loaded) == 1
     assert len(loaded[0].attempts) == 1
     assert storage.data_revision() == revision + 1
+
+
+def test_stale_metadata_updates_bump_the_data_revision(storage):
+    complete = snapshot(1, attempts=(attempt(job_id=1),))
+    storage.publish_snapshot(complete)
+    revision = storage.data_revision()
+    inconsistent = replace(
+        complete,
+        completeness=SnapshotCompleteness.INCONSISTENT,
+        snapshot_error="refresh failed",
+    )
+    storage.publish_snapshot(inconsistent)
+    assert storage.data_revision() == revision + 1
+    assert _load(storage)[0].is_stale
+
+    revision = storage.data_revision()
+    storage.record_pipeline_error(INSTANCE, 1, 1, "listing failed")
+    assert storage.data_revision() == revision + 1
+    loaded = _load(storage)[0]
+    assert loaded.is_stale
+    assert loaded.last_error == "listing failed"
 
 
 def test_retry_attempt_updates_pipeline_and_preserves_old_failure(storage):
@@ -224,7 +246,7 @@ def test_second_process_cannot_open_the_same_database(tmp_path):
     code = """
 import sys
 from pathlib import Path
-from ci_insights.storage import Storage, StorageLockedError
+from glabviz.storage import Storage, StorageLockedError
 try:
     Storage.open(Path(sys.argv[1]))
 except StorageLockedError:

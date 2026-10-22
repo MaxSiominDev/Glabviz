@@ -5,7 +5,7 @@ from collections import Counter, defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 
-from ci_insights.domain import (
+from glabviz.domain import (
     EXECUTED_STATUSES,
     SETTLING_STATUSES,
     TERMINAL_STATUSES,
@@ -41,6 +41,18 @@ class PendingResult:
     excluded: dict[ExclusionReason, int] = field(default_factory=dict)
 
 
+def stat_value(stats: Stats, name: str) -> float | None:
+    if name == "mean":
+        return stats.mean
+    if name == "median":
+        return stats.median
+    if name == "p95":
+        return stats.p95
+    if name == "max":
+        return stats.maximum
+    raise ValueError(f"unknown statistic: {name}")
+
+
 @dataclass(frozen=True)
 class FailureRate:
     red: int
@@ -57,6 +69,11 @@ class FailureRate:
         if self.denominator == 0:
             return None
         return self.red / self.denominator
+
+    @property
+    def percent(self) -> float | None:
+        value = self.value
+        return None if value is None else value * 100
 
 
 @dataclass(frozen=True)
@@ -104,6 +121,26 @@ class IntegrationBlockObservation:
     red: bool
     wall: float | None
     pending: tuple[float, ...]
+    pending_expected: int
+
+
+@dataclass(frozen=True)
+class IntegrationBlockSummary:
+    pipelines: int
+    red: int
+    wall: Stats
+    pending: Stats
+    pending_known: int
+    pending_expected: int
+
+    @property
+    def red_share(self) -> float | None:
+        if self.pipelines == 0:
+            return None
+        return self.red / self.pipelines
+
+
+Observation = PipelineObservation | StageObservation | JobObservation
 
 
 def _empty_stats() -> Stats:
@@ -365,15 +402,16 @@ def job_failure_rate(observations: Iterable[JobObservation]) -> FailureRate:
     return failure_rate((observation.category for observation in observations), False)
 
 
-def _wall_stats(
-    observations: Iterable[PipelineObservation | StageObservation | JobObservation],
-) -> Stats:
-    values = [
+def wall_values(observations: Iterable[Observation]) -> tuple[float, ...]:
+    return tuple(
         observation.wall.seconds
         for observation in observations
         if observation.category is ObjectCategory.GREEN and observation.wall.seconds is not None
-    ]
-    return summarize(values)
+    )
+
+
+def _wall_stats(observations: Iterable[Observation]) -> Stats:
+    return summarize(wall_values(observations))
 
 
 def _wall_excluded(
@@ -403,8 +441,18 @@ def stage_wall_stats(observations: Iterable[StageObservation]) -> Stats:
     return _wall_stats(observations)
 
 
+def stage_wall_excluded(
+    observations: Iterable[StageObservation],
+) -> dict[ExclusionReason, int]:
+    return _wall_excluded(observations)
+
+
 def job_wall_stats(observations: Iterable[JobObservation]) -> Stats:
     return _wall_stats(observations)
+
+
+def job_wall_excluded(observations: Iterable[JobObservation]) -> dict[ExclusionReason, int]:
+    return _wall_excluded(observations)
 
 
 def _pending_from_attempts(attempts: Iterable[JobAttempt]) -> PendingResult:
@@ -461,13 +509,13 @@ def job_pending(observations: Iterable[JobObservation]) -> PendingResult:
 
 def summarize_stages(
     observations: Iterable[StageObservation],
-) -> dict[str, ObjectSummary]:
+) -> dict[tuple[str, ...], ObjectSummary]:
     grouped: dict[str, list[StageObservation]] = defaultdict(list)
     for observation in observations:
         grouped[observation.stage].append(observation)
-    summaries = {}
+    summaries: dict[tuple[str, ...], ObjectSummary] = {}
     for stage, group in grouped.items():
-        summaries[stage] = ObjectSummary(
+        summaries[(stage,)] = ObjectSummary(
             key=(stage,),
             observations=len(group),
             executed_observations=sum(1 for observation in group if observation.executed),
@@ -481,11 +529,11 @@ def summarize_stages(
 
 def summarize_jobs(
     observations: Iterable[JobObservation],
-) -> dict[tuple[str, str], ObjectSummary]:
+) -> dict[tuple[str, ...], ObjectSummary]:
     grouped: dict[tuple[str, str], list[JobObservation]] = defaultdict(list)
     for observation in observations:
         grouped[(observation.stage, observation.exact_name)].append(observation)
-    summaries = {}
+    summaries: dict[tuple[str, ...], ObjectSummary] = {}
     for key, group in grouped.items():
         summaries[key] = ObjectSummary(
             key=key,
@@ -542,6 +590,21 @@ def build_integration_block_observations(
                 red=red,
                 wall=wall,
                 pending=pending,
+                pending_expected=len(executed_valid),
             )
         )
     return result
+
+
+def summarize_integration_block(
+    observations: Iterable[IntegrationBlockObservation],
+) -> IntegrationBlockSummary:
+    items = list(observations)
+    return IntegrationBlockSummary(
+        pipelines=len(items),
+        red=sum(1 for item in items if item.red),
+        wall=summarize([item.wall for item in items if item.wall is not None]),
+        pending=summarize([value for item in items for value in item.pending]),
+        pending_known=sum(len(item.pending) for item in items),
+        pending_expected=sum(item.pending_expected for item in items),
+    )

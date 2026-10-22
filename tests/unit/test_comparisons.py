@@ -4,22 +4,23 @@ from datetime import UTC, date, datetime
 
 import pytest
 
-from ci_insights.comparisons import (
+from glabviz.comparisons import (
     bucket_series,
     compare_rates,
     compare_stats,
     compare_summaries,
     delta,
 )
-from ci_insights.domain import MetricPeriod, ObjectCategory
-from ci_insights.metrics import (
+from glabviz.domain import MetricPeriod, ObjectCategory
+from glabviz.metrics import (
     JobObservation,
     WallResult,
+    build_job_observations,
     build_pipeline_observations,
     summarize,
     summarize_jobs,
 )
-from tests.factories import snapshot
+from tests.factories import attempt, snapshot
 
 
 def _job_observation(name: str, seconds: float | None) -> JobObservation:
@@ -49,6 +50,19 @@ def test_m14_mean_median_p95_and_relative_change():
 def test_m15_period_mean_uses_raw_observations():
     values = [100] + [10] * 9
     assert summarize(values).mean == pytest.approx(19)
+
+
+def test_pending_median_and_p95_deltas_follow_before_and_after():
+    before = snapshot(1, attempts=(attempt(job_id=1, name="job", stage="test", queued=10.0),))
+    after = snapshot(2, attempts=(attempt(job_id=2, name="job", stage="test", queued=30.0),))
+    rows = compare_summaries(
+        summarize_jobs(build_job_observations(before)),
+        summarize_jobs(build_job_observations(after)),
+    )
+    assert len(rows) == 1
+    assert rows[0].pending_median.absolute == pytest.approx(20.0)
+    assert rows[0].pending_p95.absolute == pytest.approx(20.0)
+    assert rows[0].pending_median.relative_percent == pytest.approx(200.0)
 
 
 def test_m16_rate_change_is_percentage_points_and_relative():

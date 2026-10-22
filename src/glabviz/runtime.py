@@ -4,7 +4,7 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from ci_insights.storage import Storage
+from glabviz.storage import Storage
 
 
 class SyncAlreadyRunningError(Exception):

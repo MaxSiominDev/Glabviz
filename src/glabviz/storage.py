@@ -15,7 +15,15 @@ from typing import Any
 
 import duckdb
 
-from ci_insights.domain import (
+from glabviz.analysis_config import (
+    CONFIG_VERSION,
+    ConfigValidationError,
+    SavedAnalysisConfig,
+    config_from_json,
+    dump_config,
+    validate_analysis_name,
+)
+from glabviz.domain import (
     EXECUTED_STATUSES,
     AttemptKind,
     JobAttempt,
@@ -25,12 +33,12 @@ from ci_insights.domain import (
     SourcePresence,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 METRICS_VERSION = "1"
 
-_DB_FILENAME = "ci.duckdb"
-_LOCK_FILENAME = ".ci-insights.lock"
-_MIGRATIONS = {1: "001_initial.sql"}
+_DB_FILENAME = "glabviz.duckdb"
+_LOCK_FILENAME = ".glabviz.lock"
+_MIGRATIONS = {1: "001_initial.sql", 2: "002_saved_analyses.sql"}
 
 
 class StorageError(Exception):
@@ -42,6 +50,14 @@ class StorageLockedError(StorageError):
 
 
 class SchemaTooNewError(StorageError):
+    pass
+
+
+class SavedAnalysisNameError(StorageError):
+    pass
+
+
+class SavedAnalysisNotFoundError(StorageError):
     pass
 
 
@@ -83,6 +99,17 @@ class SyncRun:
     discovered_count: int
     completed_count: int
     error_summary: str | None
+
+
+@dataclass(frozen=True)
+class SavedAnalysis:
+    analysis_id: str
+    name: str
+    instance_base_url: str
+    project_id: int
+    config: SavedAnalysisConfig
+    created_at: datetime
+    updated_at: datetime
 
 
 def _now() -> datetime:
@@ -186,7 +213,7 @@ class Storage:
                 for target in range(version + 1, SCHEMA_VERSION + 1):
                     filename = _MIGRATIONS[target]
                     sql = (
-                        resources.files("ci_insights")
+                        resources.files("glabviz")
                         .joinpath("migrations", filename)
                         .read_text(encoding="utf-8")
                     )
@@ -334,6 +361,7 @@ class Storage:
                 snapshot.pipeline_id,
             ],
         )
+        self._increment_data_revision()
 
     def record_pipeline_error(
         self,
@@ -355,6 +383,7 @@ class Storage:
                     pipeline_id,
                 ],
             )
+            self._increment_data_revision()
 
     def _upsert_pipeline(self, snapshot: PipelineSnapshot, now: datetime) -> None:
         self._conn.execute(
@@ -711,6 +740,161 @@ class Storage:
                 [instance_base_url, project_id, limit],
             )
         return [self._row_to_sync_run(row) for row in rows]
+
+    def load_pipeline(
+        self, instance_base_url: str, project_id: int, pipeline_id: int
+    ) -> PipelineSnapshot | None:
+        with self._lock:
+            rows = self._fetch_rows(
+                "SELECT * FROM pipelines "
+                "WHERE instance_base_url = ? AND project_id = ? AND pipeline_id = ?",
+                [instance_base_url, project_id, pipeline_id],
+            )
+            if not rows:
+                return None
+            attempt_rows = self._fetch_rows(
+                "SELECT * FROM job_attempts "
+                "WHERE instance_base_url = ? AND project_id = ? AND pipeline_id = ? "
+                "ORDER BY job_id",
+                [instance_base_url, project_id, pipeline_id],
+            )
+        attempts = tuple(self._row_to_attempt(row) for row in attempt_rows)
+        return self._row_to_snapshot(rows[0], attempts)
+
+    def save_analysis(self, name: str, config: SavedAnalysisConfig) -> SavedAnalysis:
+        validated = validate_analysis_name(name)
+        payload = dump_config(config)
+        config = config_from_json(payload)
+        analysis_id = uuid.uuid4().hex
+        now = _now()
+        with self._lock:
+            try:
+                self._conn.execute(
+                    "INSERT INTO saved_analyses ("
+                    "analysis_id, name, instance_base_url, project_id, config_json, "
+                    "config_version, created_at, updated_at"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    [
+                        analysis_id,
+                        validated,
+                        config.project.instance_base_url,
+                        config.project.project_id,
+                        payload,
+                        CONFIG_VERSION,
+                        _to_naive_utc(now),
+                        _to_naive_utc(now),
+                    ],
+                )
+            except duckdb.ConstraintException as exc:
+                raise SavedAnalysisNameError(
+                    f"a saved comparison named {validated!r} already exists for this project"
+                ) from exc
+        return SavedAnalysis(
+            analysis_id=analysis_id,
+            name=validated,
+            instance_base_url=config.project.instance_base_url,
+            project_id=config.project.project_id,
+            config=config,
+            created_at=now,
+            updated_at=now,
+        )
+
+    def update_analysis(
+        self,
+        analysis_id: str,
+        *,
+        name: str | None = None,
+        config: SavedAnalysisConfig | None = None,
+    ) -> SavedAnalysis:
+        existing = self.analysis(analysis_id)
+        if existing is None:
+            raise SavedAnalysisNotFoundError(f"saved analysis not found: {analysis_id}")
+        validated = validate_analysis_name(name) if name is not None else existing.name
+        updated_config = config if config is not None else existing.config
+        payload = dump_config(updated_config)
+        updated_config = config_from_json(payload)
+        now = _now()
+        with self._lock:
+            try:
+                updated = self._conn.execute(
+                    "UPDATE saved_analyses SET name = ?, instance_base_url = ?, project_id = ?, "
+                    "config_json = ?, config_version = ?, updated_at = ? "
+                    "WHERE analysis_id = ? RETURNING analysis_id",
+                    [
+                        validated,
+                        updated_config.project.instance_base_url,
+                        updated_config.project.project_id,
+                        payload,
+                        CONFIG_VERSION,
+                        _to_naive_utc(now),
+                        analysis_id,
+                    ],
+                ).fetchone()
+            except duckdb.ConstraintException as exc:
+                raise SavedAnalysisNameError(
+                    f"a saved comparison named {validated!r} already exists for this project"
+                ) from exc
+            if updated is None:
+                raise SavedAnalysisNotFoundError(f"saved analysis not found: {analysis_id}")
+        return SavedAnalysis(
+            analysis_id=analysis_id,
+            name=validated,
+            instance_base_url=updated_config.project.instance_base_url,
+            project_id=updated_config.project.project_id,
+            config=updated_config,
+            created_at=existing.created_at,
+            updated_at=now,
+        )
+
+    def rename_analysis(self, analysis_id: str, name: str) -> SavedAnalysis:
+        return self.update_analysis(analysis_id, name=name)
+
+    def delete_analysis(self, analysis_id: str) -> None:
+        with self._lock:
+            deleted = self._conn.execute(
+                "DELETE FROM saved_analyses WHERE analysis_id = ? RETURNING analysis_id",
+                [analysis_id],
+            ).fetchall()
+        if not deleted:
+            raise SavedAnalysisNotFoundError(f"saved analysis not found: {analysis_id}")
+
+    def analysis(self, analysis_id: str) -> SavedAnalysis | None:
+        with self._lock:
+            rows = self._fetch_rows(
+                "SELECT * FROM saved_analyses WHERE analysis_id = ?", [analysis_id]
+            )
+        if not rows:
+            return None
+        return self._row_to_saved_analysis(rows[0])
+
+    def analyses(self) -> list[SavedAnalysis]:
+        with self._lock:
+            rows = self._fetch_rows(
+                "SELECT * FROM saved_analyses ORDER BY updated_at DESC, name", []
+            )
+        return [self._row_to_saved_analysis(row) for row in rows]
+
+    def _row_to_saved_analysis(self, row: dict[str, Any]) -> SavedAnalysis:
+        try:
+            config = config_from_json(row["config_json"])
+        except ConfigValidationError as exc:
+            raise StorageError(
+                f"saved analysis {row['analysis_id']} has an invalid configuration: {exc}"
+            ) from exc
+        if int(row["config_version"]) != CONFIG_VERSION:
+            raise StorageError(
+                f"saved analysis {row['analysis_id']} has unsupported config version "
+                f"{row['config_version']}"
+            )
+        return SavedAnalysis(
+            analysis_id=row["analysis_id"],
+            name=row["name"],
+            instance_base_url=row["instance_base_url"],
+            project_id=int(row["project_id"]),
+            config=config,
+            created_at=_required_from_naive_utc(row["created_at"]),
+            updated_at=_required_from_naive_utc(row["updated_at"]),
+        )
 
     def _fetch_rows(self, sql: str, params: Sequence[Any]) -> list[dict[str, Any]]:
         cursor = self._conn.execute(sql, list(params))

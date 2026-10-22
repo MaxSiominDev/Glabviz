@@ -15,7 +15,7 @@ from gitlab.exceptions import (
     GitlabParsingError,
 )
 
-from ci_insights.domain import (
+from glabviz.domain import (
     ProjectInfo,
     SnapshotCompleteness,
     parse_gitlab_timestamp,
@@ -178,10 +178,14 @@ class GitLabClient:
             if next_page:
                 try:
                     next_number = int(next_page)
-                except ValueError:
-                    next_number = 0
-                if next_number <= page:
+                except ValueError as exc:
+                    raise GitLabRequestError(
+                        f"GitLab returned an invalid X-Next-Page for {path}: {next_page}"
+                    ) from exc
+                if next_number <= 0:
                     break
+                if next_number <= page:
+                    raise GitLabRequestError(f"pagination did not advance for {path}")
                 page = next_number
                 continue
             total_pages = (response.headers.get("X-Total-Pages") or "").strip()

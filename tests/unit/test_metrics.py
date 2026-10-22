@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
-from ci_insights.domain import (
+from glabviz.domain import (
     AttemptKind,
     ExclusionReason,
     MetricPeriod,
@@ -12,11 +12,12 @@ from ci_insights.domain import (
     SnapshotCompleteness,
     SourcePresence,
 )
-from ci_insights.metrics import (
+from glabviz.metrics import (
     build_job_observations,
     build_pipeline_observations,
     build_stage_observations,
     classify_pipeline,
+    job_failure_rate,
     job_pending,
     pipeline_failure_rate,
     pipeline_pending,
@@ -324,7 +325,17 @@ def test_m20_stage_failure_rate_denominator_is_stage_runs():
         snapshot(
             10 + index,
             status="failed",
-            attempts=(attempt(job_id=100 + index, stage="test", status="failed"),),
+            attempts=(
+                attempt(
+                    job_id=100 + index,
+                    stage="test",
+                    name="broken",
+                    status="failed",
+                ),
+                attempt(job_id=110 + index, stage="test", name="unit", status="success"),
+                attempt(job_id=120 + index, stage="test", name="lint", status="success"),
+                attempt(job_id=130 + index, stage="test", name="docs", status="success"),
+            ),
         )
         for index in range(8)
     ]
@@ -336,6 +347,11 @@ def test_m20_stage_failure_rate_denominator_is_stage_runs():
     ]
     assert stage_failure_rate(before_observations).value == pytest.approx(1.0)
     assert stage_failure_rate(after_observations).value == pytest.approx(1.0)
+    assert stage_failure_rate(after_observations).denominator == 8
+
+    after_jobs = [observation for snap in after for observation in build_job_observations(snap)]
+    assert job_failure_rate(after_jobs).denominator == 32
+    assert job_failure_rate(after_jobs).value == pytest.approx(0.25)
 
 
 def test_m22_same_sha_is_two_observations():
@@ -402,7 +418,7 @@ def test_bridge_failure_reddens_pipeline_and_stage_but_is_not_a_runner_job():
     job = attempt(job_id=1, name="build", stage="build", status="success")
     bridge = attempt(
         job_id=2,
-        name="run_e2e_tests",
+        name="run_e2e",
         stage="e2e_test",
         status="failed",
         kind=AttemptKind.BRIDGE,
@@ -410,11 +426,11 @@ def test_bridge_failure_reddens_pipeline_and_stage_but_is_not_a_runner_job():
     snap = snapshot(1, status="failed", attempts=(job, bridge))
     assert classify_pipeline(snap, None) is ObjectCategory.RED
     assert _stages(snap)["e2e_test"].category is ObjectCategory.RED
-    assert "run_e2e_tests" not in _jobs(snap)
+    assert "run_e2e" not in _jobs(snap)
 
     allowed_bridge = attempt(
         job_id=3,
-        name="run_e2e_tests",
+        name="run_e2e",
         stage="e2e_test",
         status="failed",
         allow_failure=True,
@@ -478,11 +494,11 @@ def test_unexplained_failed_is_excluded_from_failure_rate():
 
 
 def test_stage_scope_marks_failures_outside_the_cut():
-    inside = attempt(job_id=1, stage="lint_and_test", status="failed")
+    inside = attempt(job_id=1, stage="checks", status="failed")
     outside = attempt(job_id=2, stage="deploy", status="failed")
     inside_snap = snapshot(1, status="failed", attempts=(inside,))
     outside_snap = snapshot(2, status="failed", attempts=(outside,))
-    scope = frozenset({"lint_and_test"})
+    scope = frozenset({"checks"})
     assert classify_pipeline(inside_snap, scope) is ObjectCategory.RED
     assert classify_pipeline(outside_snap, scope) is ObjectCategory.OUTSIDE_FAIL
     rate = pipeline_failure_rate(build_pipeline_observations([inside_snap, outside_snap], scope))

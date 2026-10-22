@@ -26,4 +26,5 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy src
       - run: uv run pytest
+      - run: bash -n scripts/install.sh scripts/smoke-installed.sh
       - run: uv build

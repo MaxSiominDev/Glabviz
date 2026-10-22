@@ -6,20 +6,21 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import streamlit as st
 
-from ci_insights.collector import Collector, SyncRequest, SyncResult
-from ci_insights.config import ca_bundle, gitlab_token, gitlab_url
-from ci_insights.domain import MetricPeriod
-from ci_insights.gitlab_client import (
+from glabviz.collector import Collector, SyncRequest, SyncResult
+from glabviz.config import ca_bundle, gitlab_token, gitlab_url
+from glabviz.domain import MetricPeriod
+from glabviz.gitlab_client import (
     GitLabClient,
     GitLabError,
     GitLabSettings,
     canonical_instance_url,
 )
-from ci_insights.metrics import classify_pipeline
-from ci_insights.runtime import Runtime, SyncAlreadyRunningError
-from ci_insights.storage import Storage, StorageError, StoredProject
+from glabviz.metrics import classify_pipeline
+from glabviz.runtime import Runtime, SyncAlreadyRunningError
+from glabviz.storage import Storage, StorageError, StoredProject
+from glabviz.ui.common import project_label, project_label_parts
 
-logger = logging.getLogger("ci_insights.ui")
+logger = logging.getLogger("glabviz.ui")
 
 
 def _zone(name: str) -> ZoneInfo:
@@ -76,16 +77,18 @@ def _run_sync(
         )
         client = GitLabClient(settings)
         collector = Collector(runtime.storage, lambda: client)
-        progress = st.progress(0.0, text="Starting sync")
-
-        def on_progress(done: int, total: int, message: str) -> None:
-            ratio = done / total if total else 0.0
-            progress.progress(min(max(ratio, 0.0), 1.0), text=f"{message} ({done}/{total})")
 
         with runtime.sync_guard():
-            result = collector.sync(request, on_progress)
-        progress.empty()
-        return result
+            progress = st.progress(0.0, text="Starting sync")
+
+            def on_progress(done: int, total: int, message: str) -> None:
+                ratio = done / total if total else 0.0
+                progress.progress(min(max(ratio, 0.0), 1.0), text=f"{message} ({done}/{total})")
+
+            try:
+                return collector.sync(request, on_progress)
+            finally:
+                progress.empty()
     except SyncAlreadyRunningError as exc:
         st.warning(str(exc))
         return None
@@ -187,10 +190,12 @@ def render_data_page(runtime: Runtime) -> None:
     projects = runtime.storage.projects()
     selected: StoredProject | None = None
     if projects:
-        labels = [
-            f"{project.path} (#{project.project_id} on {project.instance_base_url})"
-            for project in projects
-        ]
+        labels = [project_label(project) for project in projects]
+        target = st.session_state.pop("_stored_project_target", None)
+        if target in labels:
+            st.session_state["stored_project"] = target
+        if st.session_state.get("stored_project") not in labels:
+            st.session_state.pop("stored_project", None)
         label = st.selectbox("Stored project", labels, key="stored_project")
         selected = projects[labels.index(label)]
     default_url = selected.instance_base_url if selected else (gitlab_url() or "")
@@ -266,9 +271,8 @@ def render_data_page(runtime: Runtime) -> None:
         )
         if result is not None:
             st.session_state["last_sync_result"] = result
-            st.session_state["stored_project"] = (
-                f"{result.project.path} (#{result.project.project_id} "
-                f"on {result.instance_base_url})"
+            st.session_state["_stored_project_target"] = project_label_parts(
+                result.project.path, result.project.project_id, result.instance_base_url
             )
             st.rerun()
 

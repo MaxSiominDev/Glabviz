@@ -4,8 +4,18 @@ import socket
 from pathlib import Path
 
 import pytest
+import streamlit as st
 
-from ci_insights.config import DATA_DIR_ENV
+from glabviz.config import DATA_DIR_ENV
+
+
+@pytest.fixture(autouse=True)
+def clear_streamlit_caches():
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    yield
+    st.cache_resource.clear()
+    st.cache_data.clear()
 
 
 @pytest.fixture(autouse=True)
