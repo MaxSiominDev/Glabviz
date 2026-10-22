@@ -1,4 +1,4 @@
-from ci_insights.config import DATA_DIR_ENV, DEFAULT_DATA_DIR, data_dir
+from glabviz.config import DATA_DIR_ENV, DEFAULT_DATA_DIR, data_dir
 
 
 def test_default_data_dir(monkeypatch):

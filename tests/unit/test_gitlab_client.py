@@ -10,8 +10,8 @@ import pytest
 import responses
 from requests import PreparedRequest
 
-from ci_insights.domain import SnapshotCompleteness
-from ci_insights.gitlab_client import (
+from glabviz.domain import SnapshotCompleteness
+from glabviz.gitlab_client import (
     GitLabAuthError,
     GitLabClient,
     GitLabRequestError,
@@ -439,3 +439,48 @@ def test_pipeline_list_dataclass_defaults():
     result = PipelineList(pipeline_ids=(1,))
     assert result.warnings == ()
     assert result.lossy is False
+
+
+@responses.activate
+def test_pipeline_list_rejects_pagination_that_does_not_advance():
+    responses.add_callback(
+        responses.GET,
+        re.compile(r"https://gitlab\.example\.com/api/v4/projects/1/pipelines.*"),
+        callback=lambda request: (
+            200,
+            {"X-Next-Page": "1"},
+            json.dumps([_pipeline(1, "2026-05-02T10:00:00Z")]),
+        ),
+    )
+    with pytest.raises(GitLabRequestError, match="did not advance"):
+        GitLabClient(_settings(per_page=1)).list_pipelines("1", AFTER, BEFORE)
+
+
+@responses.activate
+def test_pipeline_list_rejects_malformed_next_page_header():
+    responses.add_callback(
+        responses.GET,
+        re.compile(r"https://gitlab\.example\.com/api/v4/projects/1/pipelines.*"),
+        callback=lambda request: (
+            200,
+            {"X-Next-Page": "next"},
+            json.dumps([_pipeline(1, "2026-05-02T10:00:00Z")]),
+        ),
+    )
+    with pytest.raises(GitLabRequestError, match="invalid X-Next-Page"):
+        GitLabClient(_settings(per_page=1)).list_pipelines("1", AFTER, BEFORE)
+
+
+@responses.activate
+def test_pipeline_list_accepts_zero_next_page_as_the_end():
+    responses.add_callback(
+        responses.GET,
+        re.compile(r"https://gitlab\.example\.com/api/v4/projects/1/pipelines.*"),
+        callback=lambda request: (
+            200,
+            {"X-Next-Page": "0"},
+            json.dumps([_pipeline(1, "2026-05-02T10:00:00Z")]),
+        ),
+    )
+    result = GitLabClient(_settings(per_page=1)).list_pipelines("1", AFTER, BEFORE)
+    assert result.pipeline_ids == (1,)

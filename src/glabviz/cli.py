@@ -3,22 +3,22 @@ import os
 import sys
 from pathlib import Path
 
-from ci_insights import __version__
-from ci_insights.config import DATA_DIR_ENV, data_dir
+from glabviz import __version__
+from glabviz.config import DATA_DIR_ENV, data_dir
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="ci-insights",
-        description="Start the CI Insights local app (Streamlit on 127.0.0.1).",
+        prog="glabviz",
+        description="Start the Glabviz local app (Streamlit on 127.0.0.1).",
     )
-    parser.add_argument("--version", action="version", version=f"ci-insights {__version__}")
+    parser.add_argument("--version", action="version", version=f"glabviz {__version__}")
     parser.add_argument(
         "--data-dir",
         type=Path,
         default=None,
         metavar="DIR",
-        help="Data directory override (default: ~/.ci-insights or CI_INSIGHTS_DATA_DIR)",
+        help="Data directory override (default: ~/.glabviz or GLABVIZ_DATA_DIR)",
     )
     parser.add_argument(
         "--port",

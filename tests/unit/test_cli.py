@@ -2,9 +2,9 @@ import os
 
 import pytest
 
-from ci_insights import __version__
-from ci_insights.cli import build_parser, main, streamlit_args, use_data_dir
-from ci_insights.config import DATA_DIR_ENV
+from glabviz import __version__
+from glabviz.cli import build_parser, main, streamlit_args, use_data_dir
+from glabviz.config import DATA_DIR_ENV
 
 
 def test_help_lists_flags(capsys):

@@ -1,24 +1,26 @@
 from __future__ import annotations
 
+import inspect
+from dataclasses import replace
 from datetime import UTC, date, datetime
 
 import pytest
 
-from ci_insights.collector import Collector, SyncRequest
-from ci_insights.domain import (
+from glabviz.collector import Collector, CollectorError, SyncRequest, normalize_pipeline
+from glabviz.domain import (
     MetricPeriod,
     PipelineSnapshot,
     ProjectInfo,
     SnapshotCompleteness,
 )
-from ci_insights.gitlab_client import (
+from glabviz.gitlab_client import (
     GitLabAuthError,
     GitLabRequestError,
     PipelineList,
     RawSnapshot,
 )
-from ci_insights.runtime import Runtime, SyncAlreadyRunningError
-from ci_insights.storage import Storage
+from glabviz.runtime import Runtime, SyncAlreadyRunningError
+from glabviz.storage import Storage
 
 INSTANCE = "https://gitlab.example.com"
 PERIOD = MetricPeriod(date(2026, 5, 1), date(2026, 5, 31), "UTC")
@@ -243,3 +245,40 @@ def test_second_sync_is_rejected_by_process_wide_lock(storage):
     runtime = Runtime(storage)
     with runtime.sync_guard(), pytest.raises(SyncAlreadyRunningError), runtime.sync_guard():
         pass
+
+
+def test_normalize_pipeline_has_no_unused_fetched_at_parameter():
+    assert list(inspect.signature(normalize_pipeline).parameters) == ["raw"]
+
+
+def _bridge(job_id: int) -> dict:
+    return {
+        "id": job_id,
+        "name": "run_e2e",
+        "stage": "e2e_test",
+        "status": "success",
+        "allow_failure": False,
+        "created_at": "2026-05-10T10:00:00Z",
+        "started_at": "2026-05-10T10:00:01Z",
+        "finished_at": "2026-05-10T10:05:00Z",
+        "queued_duration": 1.0,
+        "duration": 299.0,
+        "web_url": f"{INSTANCE}/jobs/{job_id}",
+    }
+
+
+def test_job_and_bridge_id_collision_raises_instead_of_dropping_the_bridge(storage):
+    raw = replace(
+        _raw(1, jobs=(_job(10),)),
+        bridges=(_bridge(10),),
+        current_bridge_ids=frozenset({10}),
+    )
+    with pytest.raises(CollectorError):
+        normalize_pipeline(raw)
+
+    good = _raw(2, jobs=(_job(20),))
+    result = _sync(storage, FakeClient({1: raw, 2: good}))
+    assert result.state == "partial"
+    assert result.completed == 1
+    assert any("job id 10" in error for error in result.errors)
+    assert {snapshot.pipeline_id for snapshot in _stored(storage)} == {2}

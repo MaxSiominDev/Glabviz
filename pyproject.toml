@@ -1,5 +1,5 @@
 [project]
-name = "ci-insights"
+name = "glabviz"
 description = "Local retrospective analytics for GitLab CI/CD pipelines"
 requires-python = ">=3.14,<3.15"
 dynamic = ["version"]
@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [project.scripts]
-ci-insights = "ci_insights.cli:main"
+glabviz = "glabviz.cli:main"
 
 [dependency-groups]
 dev = [
@@ -26,10 +26,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]
-path = "src/ci_insights/__init__.py"
+path = "src/glabviz/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/ci_insights"]
+packages = ["src/glabviz"]
 
 [tool.ruff]
 line-length = 100
@@ -45,6 +45,10 @@ no_implicit_optional = true
 check_untyped_defs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = ["plotly", "plotly.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

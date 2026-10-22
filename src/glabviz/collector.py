@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from ci_insights.domain import (
+from glabviz.domain import (
     AttemptKind,
     JobAttempt,
     MetricPeriod,
@@ -16,16 +16,16 @@ from ci_insights.domain import (
     SourcePresence,
     parse_gitlab_timestamp,
 )
-from ci_insights.gitlab_client import (
+from glabviz.gitlab_client import (
     GitLabAuthError,
     GitLabRequestError,
     PipelineList,
     RawSnapshot,
     canonical_instance_url,
 )
-from ci_insights.storage import Storage
+from glabviz.storage import Storage
 
-logger = logging.getLogger("ci_insights.collector")
+logger = logging.getLogger("glabviz.collector")
 
 ProgressCallback = Callable[[int, int, str], None]
 
@@ -126,7 +126,20 @@ def _attempt_from_payload(
     )
 
 
-def normalize_pipeline(raw: RawSnapshot, fetched_at: datetime) -> PipelineSnapshot:
+def _index_attempt(index: dict[int, JobAttempt], attempt: JobAttempt) -> None:
+    existing = index.get(attempt.job_id)
+    if existing is not None:
+        if existing.kind is attempt.kind:
+            detail = f"twice as a {attempt.kind.value}"
+        else:
+            detail = f"as both a {existing.kind.value} and a {attempt.kind.value}"
+        raise CollectorError(
+            f"job id {attempt.job_id} appears {detail} in pipeline {attempt.pipeline_id}"
+        )
+    index[attempt.job_id] = attempt
+
+
+def normalize_pipeline(raw: RawSnapshot) -> PipelineSnapshot:
     detail = raw.detail
     created_at = parse_gitlab_timestamp(detail.get("created_at"))
     if created_at is None:
@@ -138,13 +151,15 @@ def normalize_pipeline(raw: RawSnapshot, fetched_at: datetime) -> PipelineSnapsh
 
     attempts_by_id: dict[int, JobAttempt] = {}
     for payload in raw.jobs:
-        attempt = _attempt_from_payload(payload, pipeline_id, AttemptKind.JOB, raw.current_job_ids)
-        attempts_by_id.setdefault(attempt.job_id, attempt)
-    for payload in raw.bridges:
-        attempt = _attempt_from_payload(
-            payload, pipeline_id, AttemptKind.BRIDGE, raw.current_bridge_ids
+        _index_attempt(
+            attempts_by_id,
+            _attempt_from_payload(payload, pipeline_id, AttemptKind.JOB, raw.current_job_ids),
         )
-        attempts_by_id.setdefault(attempt.job_id, attempt)
+    for payload in raw.bridges:
+        _index_attempt(
+            attempts_by_id,
+            _attempt_from_payload(payload, pipeline_id, AttemptKind.BRIDGE, raw.current_bridge_ids),
+        )
 
     def order(attempt: JobAttempt) -> tuple[datetime, int]:
         created = attempt.created_at or datetime.min.replace(tzinfo=UTC)
@@ -330,7 +345,7 @@ class Collector:
         client: SupportsGitLab, request: SyncRequest, pipeline_id: int
     ) -> PipelineSnapshot:
         raw = client.fetch_snapshot(request.project, pipeline_id)
-        return normalize_pipeline(raw, datetime.now(UTC))
+        return normalize_pipeline(raw)
 
     @staticmethod
     def _notify(progress: ProgressCallback | None, done: int, total: int, message: str) -> None:

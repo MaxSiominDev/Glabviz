@@ -130,6 +130,15 @@ class PipelineSnapshot:
     def is_trustworthy(self) -> bool:
         return self.completeness is SnapshotCompleteness.COMPLETE and not self.source_discrepancy
 
+    @property
+    def is_stale(self) -> bool:
+        if self.completeness is not SnapshotCompleteness.COMPLETE:
+            return False
+        state = self.last_attempt_state
+        return (state is not None and state != SnapshotCompleteness.COMPLETE.value) or bool(
+            self.last_error
+        )
+
 
 @dataclass(frozen=True)
 class MetricPeriod:
@@ -142,7 +151,7 @@ class MetricPeriod:
             raise ValueError("period end date must not be before start date")
         try:
             ZoneInfo(self.timezone)
-        except ZoneInfoNotFoundError as exc:
+        except (ZoneInfoNotFoundError, ValueError) as exc:
             raise ValueError(f"unknown timezone: {self.timezone}") from exc
 
     @property

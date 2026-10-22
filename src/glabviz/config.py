@@ -2,13 +2,13 @@ import logging
 import os
 from pathlib import Path
 
-DATA_DIR_ENV = "CI_INSIGHTS_DATA_DIR"
-GITLAB_URL_ENV = "CI_INSIGHTS_GITLAB_URL"
-GITLAB_TOKEN_ENV = "CI_INSIGHTS_GITLAB_TOKEN"
-CA_BUNDLE_ENV = "CI_INSIGHTS_CA_BUNDLE"
+DATA_DIR_ENV = "GLABVIZ_DATA_DIR"
+GITLAB_URL_ENV = "GLABVIZ_GITLAB_URL"
+GITLAB_TOKEN_ENV = "GLABVIZ_GITLAB_TOKEN"
+CA_BUNDLE_ENV = "GLABVIZ_CA_BUNDLE"
 REQUESTS_CA_BUNDLE_ENV = "REQUESTS_CA_BUNDLE"
 
-DEFAULT_DATA_DIR = Path.home() / ".ci-insights"
+DEFAULT_DATA_DIR = Path.home() / ".glabviz"
 
 
 def data_dir() -> Path:
@@ -31,7 +31,7 @@ def ca_bundle() -> str | None:
 def configure_logging(directory: Path) -> None:
     log_dir = directory / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    logger = logging.getLogger("ci_insights")
+    logger = logging.getLogger("glabviz")
     if logger.handlers:
         return
     logger.setLevel(logging.INFO)

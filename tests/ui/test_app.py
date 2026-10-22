@@ -7,12 +7,12 @@ import pytest
 import streamlit as st
 from streamlit.testing.v1 import AppTest
 
-from ci_insights.domain import ProjectInfo, SnapshotCompleteness
-from ci_insights.gitlab_client import PipelineList, RawSnapshot
-from ci_insights.storage import Storage
+from glabviz.domain import ProjectInfo, SnapshotCompleteness
+from glabviz.gitlab_client import PipelineList, RawSnapshot
+from glabviz.storage import Storage
 from tests.factories import attempt, snapshot
 
-APP_PATH = Path(__file__).resolve().parents[2] / "src" / "ci_insights" / "app.py"
+APP_PATH = Path(__file__).resolve().parents[2] / "src" / "glabviz" / "app.py"
 
 
 @pytest.fixture(autouse=True)
@@ -25,13 +25,46 @@ def clear_runtime_cache():
 def test_app_renders_without_data(data_directory):
     at = AppTest.from_file(str(APP_PATH)).run(timeout=15)
     assert not at.exception
-    assert at.title[0].value == "CI Insights"
+    assert at.title[0].value == "Glabviz"
     assert any("No data is stored yet" in info.value for info in at.info)
+
+
+def test_unknown_stored_project_label_falls_back(data_directory, monkeypatch):
+    store = Storage.open(data_directory)
+    try:
+        for project_id, path in ((1, "group/project"), (2, "group/other")):
+            store.upsert_project(
+                ProjectInfo(
+                    project_id=project_id,
+                    path=path,
+                    name="Project",
+                    default_branch="main",
+                ),
+                "https://gitlab.example.com",
+                "UTC",
+                {},
+            )
+        first = next(project for project in store.projects() if project.project_id == 1)
+    finally:
+        store.close()
+
+    at = AppTest.from_file(str(APP_PATH)).run(timeout=15)
+    at.get_by_key("stored_project").set_value("group/other (#2 on https://gitlab.example.com)").run(
+        timeout=15
+    )
+    assert not at.exception
+
+    monkeypatch.setattr(Storage, "projects", lambda self: [first])
+    at.run(timeout=15)
+    assert not at.exception
+    assert at.get_by_key("stored_project").value == (
+        "group/project (#1 on https://gitlab.example.com)"
+    )
 
 
 def test_app_shows_stored_pipelines_offline(data_directory, monkeypatch):
     monkeypatch.setattr(
-        "ci_insights.ui.data.GitLabClient",
+        "glabviz.ui.data.GitLabClient",
         lambda *args, **kwargs: pytest.fail("GitLab client must not be created on render"),
     )
     store = Storage.open(data_directory)
@@ -123,7 +156,7 @@ class FakeGitLabClient:
 
 
 def test_load_button_persists_pipeline(data_directory, monkeypatch):
-    monkeypatch.setattr("ci_insights.ui.data.GitLabClient", FakeGitLabClient)
+    monkeypatch.setattr("glabviz.ui.data.GitLabClient", FakeGitLabClient)
     at = AppTest.from_file(str(APP_PATH)).run(timeout=15)
     at.text_input[0].set_value("https://gitlab.example.com")
     at.text_input[1].set_value("1")
@@ -135,3 +168,40 @@ def test_load_button_persists_pipeline(data_directory, monkeypatch):
     frames = [frame.value for frame in at.dataframe if "pipeline" in frame.value.columns]
     assert frames, "recent pipelines table is missing after sync"
     assert 7 in frames[0]["pipeline"].tolist()
+
+
+def test_sync_lock_does_not_leave_a_progress_bar(data_directory, monkeypatch):
+    from glabviz.runtime import SyncAlreadyRunningError
+
+    monkeypatch.setattr("glabviz.ui.data.GitLabClient", FakeGitLabClient)
+
+    def locked(self):
+        raise SyncAlreadyRunningError("a sync is already running")
+
+    monkeypatch.setattr("glabviz.ui.data.Runtime.sync_guard", locked)
+    at = AppTest.from_file(str(APP_PATH)).run(timeout=15)
+    at.text_input[0].set_value("https://gitlab.example.com")
+    at.text_input[1].set_value("1")
+    at.text_input[2].set_value("token")
+    at.date_input[0].set_value(date(2026, 5, 1))
+    at.date_input[1].set_value(date(2026, 5, 31))
+    at.button[1].click().run(timeout=15)
+    assert not at.exception
+    assert any("already running" in warning.value for warning in at.warning)
+    assert len(at.progress) == 0
+
+
+def test_repeated_load_does_not_mutate_an_instantiated_widget(data_directory, monkeypatch):
+    monkeypatch.setattr("glabviz.ui.data.GitLabClient", FakeGitLabClient)
+    at = AppTest.from_file(str(APP_PATH)).run(timeout=15)
+    at.text_input[0].set_value("https://gitlab.example.com")
+    at.text_input[1].set_value("1")
+    at.text_input[2].set_value("token")
+    at.date_input[0].set_value(date(2026, 5, 1))
+    at.date_input[1].set_value(date(2026, 5, 31))
+    at.button[1].click().run(timeout=15)
+    assert not at.exception
+    at.button[1].click().run(timeout=15)
+    assert not at.exception
+    frames = [frame.value for frame in at.dataframe if "pipeline" in frame.value.columns]
+    assert frames

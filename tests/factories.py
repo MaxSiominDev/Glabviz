@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from ci_insights.domain import (
+from glabviz.domain import (
     AttemptKind,
     JobAttempt,
     PipelineSnapshot,
