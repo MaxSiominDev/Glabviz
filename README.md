@@ -32,7 +32,7 @@ curl -fsSL '<install.sh URL>' | bash -s -- --source-url '<release tarball URL>'
 
 The URLs are placeholders until a public repository and release location are chosen.
 Nothing in this repository claims that a published installer exists today. See
-[docs/public/publishing.md](docs/public/publishing.md).
+[docs/public/publishing.md](https://github.com/MaxSiominDev/Glabviz/blob/main/docs/public/publishing.md).
 
 Other installer options: `--archive FILE`, `--source-url URL`, `--sha256 HEX`,
 `--prefix DIR`, `--bin-dir DIR`, `--python VERSION`, `--force`. `--sha256` verifies an
@@ -54,6 +54,12 @@ binds `127.0.0.1` only. Stop it with Ctrl+C. Data and saved comparisons survive 
 Open the **Data** page and fill in the GitLab base URL, the project ID or path, a personal
 access token and a date range. `Test connection` checks the project; `Load / update`
 re-reads the chosen range and stores it locally.
+
+On macOS you can skip typing the token: if you use the [glab CLI](https://gitlab.com/gitlab-org/cli),
+click **Use glab token** and the app asks glab itself (`glab auth status --show-token`)
+which token it uses for the host in the Base URL field, so whatever glab resolves - config
+or keyring - is what the app gets. The value stays in the browser session and is never
+stored on disk or printed.
 
 Environment variables:
 
@@ -138,5 +144,5 @@ Delete `~/.glabviz` as well only if you also want to remove the local database.
 
 ## Documentation
 
-- [docs/public/metrics.md](docs/public/metrics.md): metric definitions and formulas.
-- [docs/public/architecture.md](docs/public/architecture.md): modules and data flow.
+- [docs/public/metrics.md](https://github.com/MaxSiominDev/Glabviz/blob/main/docs/public/metrics.md): metric definitions and formulas.
+- [docs/public/architecture.md](https://github.com/MaxSiominDev/Glabviz/blob/main/docs/public/architecture.md): modules and data flow.

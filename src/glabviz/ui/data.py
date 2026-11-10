@@ -15,9 +15,11 @@ from glabviz.gitlab_client import (
     GitLabSettings,
     canonical_instance_url,
 )
+from glabviz.glab_keychain import hostname_of, keychain_service, read_glab_token
 from glabviz.metrics import classify_pipeline
 from glabviz.runtime import Runtime, SyncAlreadyRunningError
 from glabviz.storage import Storage, StorageError, StoredProject
+from glabviz.ui import keys
 from glabviz.ui.common import project_label, project_label_parts
 
 logger = logging.getLogger("glabviz.ui")
@@ -224,25 +226,48 @@ def render_data_page(runtime: Runtime) -> None:
         default_start = default_end - timedelta(days=30)
 
     st.subheader("GitLab connection")
-    with st.form("gitlab_sync"):
-        base_url = st.text_input("GitLab base URL", value=default_url)
-        project = st.text_input("Project ID or path", value=default_project)
-        token = st.text_input(
-            "Personal access token",
-            value=gitlab_token() or "",
-            type="password",
-        )
-        left, right = st.columns(2)
-        source = left.text_input("Source filter", value=default_source)
-        ref = right.text_input("Ref filter (optional)", value=default_ref)
-        name = right.text_input("Pipeline name filter (optional)", value=default_name)
-        bottom_left, bottom_right = st.columns(2)
-        timezone_name = bottom_left.text_input("Timezone", value=default_timezone)
-        ca = bottom_left.text_input("CA bundle (optional)", value=ca_bundle() or "")
-        start_date = bottom_right.date_input("Start date", value=default_start)
-        end_date = bottom_right.date_input("End date", value=default_end)
-        test_clicked = st.form_submit_button("Test connection")
-        load_clicked = st.form_submit_button("Load / update")
+    glab_clicked = st.button(
+        "Use glab token",
+        help=(
+            "Read the token that the glab CLI itself uses for the host in the "
+            "Base URL field. The value stays in this browser session and is "
+            "never stored on disk."
+        ),
+    )
+    if glab_clicked:
+        glab_url_value = st.session_state.get(keys.D_BASE_URL) or default_url
+        token_from_glab = read_glab_token(glab_url_value)
+        host = hostname_of(glab_url_value)
+        if token_from_glab is None:
+            service = keychain_service(host) if host else "glab:<host>:token"
+            st.warning(f"No glab keychain token found (looked for service {service}).")
+        else:
+            st.session_state[keys.D_TOKEN] = token_from_glab
+            st.success(f"Token for {host} loaded from the glab keychain.")
+
+    # Plain widgets instead of st.form: form values only reach the server on
+    # submit, which made "Use glab token" blind to the host the user had just
+    # typed. Every field lives in the session, so the button sees it live.
+    base_url = st.text_input("GitLab base URL", value=default_url, key=keys.D_BASE_URL)
+    project = st.text_input("Project ID or path", value=default_project, key=keys.D_PROJECT)
+    token = st.text_input(
+        "Personal access token",
+        value=gitlab_token() or "",
+        type="password",
+        key=keys.D_TOKEN,
+    )
+    left, right = st.columns(2)
+    source = left.text_input("Source filter", value=default_source, key=keys.D_SOURCE)
+    ref = right.text_input("Ref filter (optional)", value=default_ref, key=keys.D_REF)
+    name = right.text_input("Pipeline name filter (optional)", value=default_name, key=keys.D_NAME)
+    bottom_left, bottom_right = st.columns(2)
+    timezone_name = bottom_left.text_input("Timezone", value=default_timezone, key=keys.D_TIMEZONE)
+    ca = bottom_left.text_input("CA bundle (optional)", value=ca_bundle() or "", key=keys.D_CA)
+    start_date = bottom_right.date_input("Start date", value=default_start, key=keys.D_START)
+    end_date = bottom_right.date_input("End date", value=default_end, key=keys.D_END)
+    test_col, load_col = st.columns(2)
+    test_clicked = test_col.button("Test connection")
+    load_clicked = load_col.button("Load / update")
 
     if test_clicked:
         try:
