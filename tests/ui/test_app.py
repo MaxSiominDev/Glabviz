@@ -10,6 +10,7 @@ from streamlit.testing.v1 import AppTest
 from glabviz.domain import ProjectInfo, SnapshotCompleteness
 from glabviz.gitlab_client import PipelineList, RawSnapshot
 from glabviz.storage import Storage
+from glabviz.ui import keys
 from tests.factories import attempt, snapshot
 
 APP_PATH = Path(__file__).resolve().parents[2] / "src" / "glabviz" / "app.py"
@@ -20,6 +21,10 @@ def clear_runtime_cache():
     st.cache_resource.clear()
     yield
     st.cache_resource.clear()
+
+
+def _load_button(at):
+    return next(b for b in at.button if b.label == "Load / update")
 
 
 def test_app_renders_without_data(data_directory):
@@ -163,7 +168,7 @@ def test_load_button_persists_pipeline(data_directory, monkeypatch):
     at.text_input[2].set_value("token")
     at.date_input[0].set_value(date(2026, 5, 1))
     at.date_input[1].set_value(date(2026, 5, 31))
-    at.button[1].click().run(timeout=15)
+    _load_button(at).click().run(timeout=15)
     assert not at.exception
     frames = [frame.value for frame in at.dataframe if "pipeline" in frame.value.columns]
     assert frames, "recent pipelines table is missing after sync"
@@ -185,7 +190,7 @@ def test_sync_lock_does_not_leave_a_progress_bar(data_directory, monkeypatch):
     at.text_input[2].set_value("token")
     at.date_input[0].set_value(date(2026, 5, 1))
     at.date_input[1].set_value(date(2026, 5, 31))
-    at.button[1].click().run(timeout=15)
+    _load_button(at).click().run(timeout=15)
     assert not at.exception
     assert any("already running" in warning.value for warning in at.warning)
     assert len(at.progress) == 0
@@ -199,9 +204,29 @@ def test_repeated_load_does_not_mutate_an_instantiated_widget(data_directory, mo
     at.text_input[2].set_value("token")
     at.date_input[0].set_value(date(2026, 5, 1))
     at.date_input[1].set_value(date(2026, 5, 31))
-    at.button[1].click().run(timeout=15)
+    _load_button(at).click().run(timeout=15)
     assert not at.exception
-    at.button[1].click().run(timeout=15)
+    _load_button(at).click().run(timeout=15)
     assert not at.exception
     frames = [frame.value for frame in at.dataframe if "pipeline" in frame.value.columns]
     assert frames
+
+
+def test_use_glab_token_button_loads_session_token(data_directory, monkeypatch):
+    monkeypatch.setattr("glabviz.ui.data.read_glab_token", lambda url: "glpat-from-keychain")
+    at = AppTest.from_file(str(APP_PATH)).run(timeout=15)
+    button = next(b for b in at.button if b.label == "Use glab token")
+    button.click().run(timeout=15)
+    assert not at.exception
+    assert at.session_state[keys.D_TOKEN] == "glpat-from-keychain"
+    assert any("loaded from the glab keychain" in s.value for s in at.success)
+
+
+def test_use_glab_token_missing_entry_warns(data_directory, monkeypatch):
+    monkeypatch.setattr("glabviz.ui.data.read_glab_token", lambda url: None)
+    at = AppTest.from_file(str(APP_PATH)).run(timeout=15)
+    button = next(b for b in at.button if b.label == "Use glab token")
+    button.click().run(timeout=15)
+    assert not at.exception
+    assert any("No glab keychain token found" in w.value for w in at.warning)
+    assert not at.session_state[keys.D_TOKEN]
